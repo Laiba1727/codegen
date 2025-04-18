@@ -27,20 +27,27 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 os.environ["TRANSFORMERS_CACHE"] = str(CACHE_DIR)
 os.environ["HF_HOME"] = str(CACHE_DIR)
 
-# Load AI Model
+# Lazy model loading with efficient memory management
 MODEL_NAME = "codellama/CodeLlama-7b-Instruct-hf"
 
-try:
-    tokenizer = AutoTokenizer.from_pretrained(
-        MODEL_NAME,
-        cache_dir=str(CACHE_DIR))
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
-        device_map="auto",
-        torch_dtype=torch.float16,
-        cache_dir=str(CACHE_DIR))
-except Exception as e:
-    raise RuntimeError(f"Failed to load model: {str(e)}")
+tokenizer = None
+model = None
+
+def load_model():
+    """Load the model only when it's needed to save memory."""
+    global tokenizer, model
+    if tokenizer is None or model is None:
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                MODEL_NAME,
+                cache_dir=str(CACHE_DIR))
+            model = AutoModelForCausalLM.from_pretrained(
+                MODEL_NAME,
+                device_map="auto",
+                torch_dtype=torch.float16,  # Use float16 for memory optimization
+                cache_dir=str(CACHE_DIR))
+        except Exception as e:
+            raise RuntimeError(f"Failed to load model: {str(e)}")
 
 # Request Model
 class CodeRequest(BaseModel):
@@ -109,6 +116,7 @@ def evaluate_code(user_code: str, lang: str) -> dict:
 
 def optimize_code_ai(user_code: str, lang: str) -> str:
     """Generate optimized code using AI"""
+    load_model()  # Load the model only when optimization is requested
     try:
         if lang == "python":
             user_code = autopep8.fix_code(user_code)
@@ -118,7 +126,7 @@ def optimize_code_ai(user_code: str, lang: str) -> str:
         prompt = f"Optimize this {lang} code:\n```{lang}\n{user_code}\n```\nOptimized version:"
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
         
-        with torch.no_grad():
+        with torch.no_grad():  # Avoid unnecessary memory use
             outputs = model.generate(**inputs, max_length=1024)
         
         optimized_code = tokenizer.decode(outputs[0], skip_special_tokens=True)
@@ -164,4 +172,5 @@ if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 8000))  # Railway will provide PORT
     uvicorn.run("app:app", host="0.0.0.0", port=port)
+
 
