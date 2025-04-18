@@ -28,7 +28,7 @@ os.environ["TRANSFORMERS_CACHE"] = str(CACHE_DIR)
 os.environ["HF_HOME"] = str(CACHE_DIR)
 
 # Load AI Model
-MODEL_NAME = "codellama/CodeLlama-7b-hf"
+MODEL_NAME = "codellama/CodeLlama-7b-Instruct-hf"
 
 try:
     tokenizer = AutoTokenizer.from_pretrained(
