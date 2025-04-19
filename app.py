@@ -222,7 +222,9 @@ async def health():
 async def root():
     return {'message': 'Auto Language Code API running'}
 
+# Only run locally with: python filename.py
 if __name__ == '__main__':
     import uvicorn
     port = int(os.environ.get('PORT', 8080))
     uvicorn.run('auto_lang_code_api:app', host='0.0.0.0', port=port, workers=1)
+
