@@ -113,7 +113,7 @@ def evaluate_code(user_code: str, lang: str) -> dict:
         logger.error(f"Error in evaluate_code: {str(e)}")
         return {"status": "error", "message": str(e), "score": 0}
 
-# Optimize code using LLM
+# Optimize code using LLM (Modified for CPU)
 def optimize_code_ai(user_code: str, lang: str) -> str:
     global tokenizer, model
     if tokenizer is None or model is None:
@@ -127,13 +127,13 @@ def optimize_code_ai(user_code: str, lang: str) -> str:
             model = AutoModelForSeq2SeqLM.from_pretrained(
                 MODEL_NAME,
                 token=HF_TOKEN,
-                device_map="auto",
-                torch_dtype=torch.float16,
+                device_map=None,
+                torch_dtype=torch.float32,
                 low_cpu_mem_usage=True,
-                load_in_8bit=True,
                 cache_dir=str(CACHE_DIR)
             )
-            logger.info("Model loaded successfully")
+            model.to("cpu")  # Explicit CPU allocation
+            logger.info("Model loaded successfully on CPU")
         except Exception as e:
             logger.error(f"Model loading failed: {str(e)}")
             raise RuntimeError(f"Failed to load model: {str(e)}")
@@ -144,7 +144,6 @@ def optimize_code_ai(user_code: str, lang: str) -> str:
             user_code = re.sub(r"eval\((.*)\)", r"int(\1)  # Removed eval for security", user_code)
             user_code = re.sub(r"/ 0", "/ 1  # Fixed division by zero", user_code)
 
-        # Corrected f-string with multiline string
         prompt = f"""Optimize this {lang} code:
 
 {lang}
@@ -152,7 +151,7 @@ def optimize_code_ai(user_code: str, lang: str) -> str:
 
 Optimized version:"""
         
-        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+        inputs = tokenizer(prompt, return_tensors="pt").to("cpu")
 
         with torch.no_grad():
             outputs = model.generate(**inputs, max_length=1024)
@@ -168,7 +167,7 @@ Optimized version:"""
         logger.error(f"Error in optimize_code_ai: {str(e)}")
         raise HTTPException(status_code=500, detail=f"AI optimization failed: {str(e)}")
 
-# Endpoints
+# Endpoints (unchanged)
 @app.post("/evaluate")
 async def evaluate_endpoint(request: CodeRequest):
     try:
