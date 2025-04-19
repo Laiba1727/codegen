@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -16,23 +16,20 @@ from typing import Optional
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI with explicit settings
+# Initialize FastAPI with minimal settings
 app = FastAPI(
-    title="Code Evaluation & Optimization API",
-    docs_url="/docs",  # Enable Swagger UI
-    openapi_url="/openapi.json",
-    redoc_url=None
+    title="Code Evaluation API",
+    docs_url=None,  # Disable docs to simplify
+    redoc_url=None,
+    openapi_url=None
 )
-
-# Create API router
-api_router = APIRouter()
 
 # Enhanced CORS Configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Changed to allow all methods
+    allow_methods=["POST", "OPTIONS", "GET"],  # Explicitly allowed methods
     allow_headers=["*"],
     expose_headers=["*"]
 )
@@ -159,8 +156,8 @@ def optimize_code_ai(user_code: str, lang: str) -> str:
         logger.error(f"Error in optimize_code_ai: {str(e)}")
         raise HTTPException(status_code=500, detail=f"AI optimization failed: {str(e)}")
 
-# API Endpoints
-@api_router.post("/v1/evaluate", response_model=dict)
+# API Endpoints - Direct routes without router
+@app.post("/evaluate")
 async def evaluate_endpoint(request: CodeRequest):
     try:
         result = evaluate_code(request.code, request.language)
@@ -169,7 +166,7 @@ async def evaluate_endpoint(request: CodeRequest):
         logger.error(f"Error in evaluate_endpoint: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
 
-@api_router.post("/v1/optimize", response_model=dict)
+@app.post("/optimize")
 async def optimize_endpoint(request: CodeRequest):
     try:
         optimized = optimize_code_ai(request.code, request.language)
@@ -178,13 +175,30 @@ async def optimize_endpoint(request: CodeRequest):
         logger.error(f"Error in optimize_endpoint: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.get("/")
-async def root():
+# Explicit OPTIONS handlers
+@app.options("/evaluate")
+async def options_evaluate():
     return Response(
-        content="Welcome to Code Evaluation API. Use /docs for Swagger UI.",
-        media_type="text/plain"
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*"
+        }
     )
 
+@app.options("/optimize")
+async def options_optimize():
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*"
+        }
+    )
+
+# Health check endpoint
 @app.get("/health")
 async def health_check():
     return Response(
@@ -193,30 +207,23 @@ async def health_check():
         status_code=200
     )
 
-# Include the router with prefix
-app.include_router(api_router, prefix="/api")
+# Root endpoint
+@app.get("/")
+async def root():
+    return {
+        "message": "Code Evaluation API is running",
+        "endpoints": {
+            "evaluate": "POST /evaluate",
+            "optimize": "POST /optimize"
+        }
+    }
 
-# OPTIONS Handler Middleware
-@app.middleware("http")
-async def options_handler(request: Request, call_next):
-    if request.method == "OPTIONS":
-        return Response(
-            content="OK",
-            status_code=200,
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-                "Access-Control-Allow-Headers": "*"
-            }
-        )
-    return await call_next(request)
-
-# Middleware to log requests
+# Request logging middleware
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    logger.info(f"Incoming request: {request.method} {request.url.path}")
+    logger.info(f"Request: {request.method} {request.url.path}")
     response = await call_next(request)
-    logger.info(f"Response status: {response.status_code}")
+    logger.info(f"Response: {response.status_code}")
     return response
 
 if __name__ == "__main__":
@@ -227,6 +234,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=port,
         workers=1,
-        timeout_keep_alive=60,
-        log_level="info"
+        timeout_keep_alive=60
     )
