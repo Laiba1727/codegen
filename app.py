@@ -1,5 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
+import torch
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 import autopep8
 import subprocess
 import time
@@ -9,7 +11,6 @@ from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 from typing import Optional
-import requests
 
 # Optional Pygments import for language detection
 try:
@@ -49,6 +50,11 @@ os.environ["HF_HOME"] = str(CACHE_DIR)
 
 # Hugging Face Token
 HF_TOKEN = os.getenv("HF_API_TOKEN")
+
+# Model Configuration
+MODEL_NAME = "Salesforce/codet5-small"
+tokenizer: Optional[AutoTokenizer] = None
+model: Optional[AutoModelForSeq2SeqLM] = None
 
 # Supported languages mapping
 LANG_EXT = {
@@ -154,36 +160,40 @@ def fallback_optimize_code(code: str, lang: str) -> str:
         return optimized
     return code + "\n# No optimization available for this language."
 
-# Optimize code using Hugging Face API
-def optimize_code_ai(user_code: str, lang: str) -> str:
-    try:
-        prompt = f"Improve and optimize this {lang} code:\n\n{user_code}\n\nOptimized version:\n"
-        headers = {
-            "Authorization": f"Bearer {HF_TOKEN}"
-        }
-        payload = {
-            "inputs": prompt,
-            "parameters": {"max_new_tokens": 256}
-        }
-        response = requests.post(
-            f"https://api-inference.huggingface.co/models/Salesforce/codet5-small",
-            headers=headers,
-            json=payload,
-            timeout=20
-        )
-        response.raise_for_status()
-        result = response.json()
+# Optimize code using LLM with fallback
 
-        if isinstance(result, list) and "generated_text" in result[0]:
-            generated = result[0]["generated_text"]
-            if 'Optimized version:' in generated:
-                return generated.split('Optimized version:')[-1].strip()
-            return generated.strip()
+def optimize_code_ai(user_code: str, lang: str) -> str:
+    global tokenizer, model
+    try:
+        if tokenizer is None or model is None:
+            logger.info('Loading model for optimization...')
+            tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, token=HF_TOKEN, cache_dir=str(CACHE_DIR))
+            model = AutoModelForSeq2SeqLM.from_pretrained(
+                MODEL_NAME, token=HF_TOKEN, cache_dir=str(CACHE_DIR), torch_dtype=torch.float32
+            ).to('cpu')
+            logger.info('Model loaded on CPU')
+
+        logger.info(f'Generating optimized code for language: {lang}')
+        prompt = f"Optimize this {lang} code:\n{user_code}\n\nOptimized version:"
+
+        inputs = tokenizer(prompt, return_tensors='pt', truncation=True).to('cpu')
+        outputs = model.generate(**inputs, max_length=512, num_beams=3, early_stopping=True)
+        decoded = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+
+        logger.info(f"Decoded Output: {decoded}")
+
+        if 'Optimized version:' in decoded:
+            optimized = decoded.split('Optimized version:', 1)[1].strip()
         else:
-            raise ValueError("Unexpected response format")
+            optimized = decoded.strip()
+
+        if optimized.strip() in ('...', '', user_code.strip()):
+            raise ValueError("Empty or same code returned")
+
+        return optimized
 
     except Exception as ex:
-        logger.warning(f"Hugging Face API failed: {ex}")
+        logger.warning(f"LLM optimization failed: {ex} – Using fallback optimization.")
         return fallback_optimize_code(user_code, lang)
 
 # Endpoints
@@ -211,7 +221,7 @@ async def options_opt():
 
 @app.get('/health')
 async def health():
-    return {'status':'ok'}
+    return {'status':'ok' if model else 'loading'}
 
 @app.get('/')
 async def root():
@@ -223,3 +233,4 @@ if __name__ == '__main__':
     uvicorn.run(
         'auto_lang_code_api:app', host='0.0.0.0', port=port, workers=1
     )
+
