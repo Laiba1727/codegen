@@ -12,9 +12,13 @@ from fastapi.middleware.cors import CORSMiddleware
 import logging
 from typing import Optional
 
-# Import Pygments for language detection
-from pygments.lexers import guess_lexer
-from pygments.util import ClassNotFound
+# Optional Pygments import for language detection
+try:
+    from pygments.lexers import guess_lexer
+    from pygments.util import ClassNotFound
+    _pygments_available = True
+except ImportError:
+    _pygments_available = False
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -65,139 +69,170 @@ class CodeRequest(BaseModel):
     code: str
     language: Optional[str] = None  # auto-detect if not provided
 
-# Detect programming language using Pygments
+# Detect programming language
 def detect_language(code: str) -> str:
+    if not _pygments_available:
+        logger.warning('Pygments not installed; defaulting to python')
+        return 'python'
     try:
         lexer = guess_lexer(code)
         alias = lexer.aliases[0]
         if alias in ('python', 'py'):
             return 'python'
-        elif alias in ('java',):
+        elif alias == 'java':
             return 'java'
         elif alias in ('cpp', 'c++'):
             return 'cpp'
         elif alias in ('js', 'javascript', 'nodejs'):
             return 'javascript'
-    except ClassNotFound:
-        logger.warning('Language detection failed, defaulting to plaintext')
-    return 'plaintext'
+    except Exception as ex:
+        logger.warning(f'Language detection failed ({ex}); defaulting to python')
+    return 'python'
 
 # Evaluate code
 def evaluate_code(user_code: str, lang: str) -> dict:
+    file_ext = LANG_EXT.get(lang, 'txt')
+    filename = f"temp_script.{file_ext}"
     try:
-        file_ext = LANG_EXT.get(lang, 'txt')
-        filename = f"temp_script.{file_ext}"
-
-        # Write code to temporary file
         with open(filename, "w") as f:
             f.write(user_code)
 
-        # Execution commands
         commands = {
-            "python": ["python3", filename],
-            "java": ["javac", filename, "&&", "java", filename.replace(".java", "")],
-            "cpp": ["g++", filename, "-o", "temp_out", "&&", "./temp_out"],
-            "javascript": ["node", filename]
+            'python': ['python3', filename],
+            'java': ['javac', filename, '&&', 'java', filename.replace('.java','')],
+            'cpp': ['g++', filename, '-o', 'temp_out', '&&', './temp_out'],
+            'javascript': ['node', filename]
         }
 
         start_time = time.time()
         if lang in commands:
-            result = subprocess.run(" ".join(commands[lang]), capture_output=True,
-                                    text=True, timeout=15, shell=True)
+            proc = subprocess.run(' '.join(commands[lang]), capture_output=True,
+                                   text=True, timeout=15, shell=True)
             exec_time = time.time() - start_time
-            success = result.returncode == 0
-            stderr = result.stderr.strip() if not success else None
+            success = proc.returncode == 0
+            stderr = proc.stderr.strip() if not success else None
         else:
-            return {"status": "error", "message": "Unsupported language", "score": 0}
+            return {'status':'error','message':'Unsupported language','score':0}
 
-        # Scoring metrics
         score = 0
         score += 50 if success else 0
         score += 20 if len(user_code) < 200 else 10
         score += 30 if exec_time < 1 else 10
         score += 20 if not re.search(r"\b(eval|exec)\b", user_code) else 0
-        total = min(max(score, 0), 100)
+        total = max(0, min(score,100))
 
         feedback = []
         if not success:
             feedback.append(f"Error: {stderr}")
         else:
-            feedback.append("Execution successful.")
+            feedback.append('Execution successful.')
         if exec_time >= 1:
-            feedback.append("Performance: consider optimizing loops.")
+            feedback.append('Performance: consider optimizing loops.')
         if len(user_code) >= 200:
-            feedback.append("Readability: consider refactoring into functions.")
+            feedback.append('Readability: refactor into functions.')
         if re.search(r"\b(eval|exec)\b", user_code):
-            feedback.append("Security: avoid eval()/exec().")
+            feedback.append('Security: avoid eval()/exec().')
 
         return {
-            "status": "success" if success else "error",
-            "execution_time": round(exec_time, 3) if success else None,
-            "score": total,
-            "feedback": feedback
+            'status':'success' if success else 'error',
+            'execution_time':round(exec_time,3) if success else None,
+            'score':total,
+            'feedback':feedback
         }
     except Exception as ex:
         logger.error(f"evaluation error: {ex}")
-        return {"status": "error", "message": str(ex), "score": 0}
+        return {'status':'error','message':str(ex),'score':0}
 
-# Optimize code using LLM
+def fallback_optimize_code(code: str, lang: str) -> str:
+    if lang == 'python':
+        optimized = autopep8.fix_code(code)
+        optimized += "\n# TIP: Break down large functions for readability."
+        return optimized
+    elif lang == 'java':
+        optimized = re.sub(r'{', '{\n', code)
+        optimized = re.sub(r';', ';\n', optimized)
+        optimized += "\n// TIP: Use streams and avoid nested loops when possible."
+        return optimized
+    elif lang == 'cpp':
+        optimized = re.sub(r'{', '{\n', code)
+        optimized = re.sub(r';', ';\n', optimized)
+        optimized += "\n// TIP: Consider STL algorithms and minimize pointer usage."
+        return optimized
+    return code + "\n# No optimization available for this language."
+
+# Optimize code using LLM with fallback
+
 def optimize_code_ai(user_code: str, lang: str) -> str:
     global tokenizer, model
-    if tokenizer is None or model is None:
-        logger.info("Loading model...")
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, token=HF_TOKEN, cache_dir=str(CACHE_DIR))
-        model = AutoModelForSeq2SeqLM.from_pretrained(
-            MODEL_NAME, token=HF_TOKEN, cache_dir=str(CACHE_DIR), torch_dtype=torch.float32
-        ).to("cpu")
-        logger.info("Model loaded on CPU")
+    try:
+        if tokenizer is None or model is None:
+            logger.info('Loading model for optimization...')
+            tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, token=HF_TOKEN, cache_dir=str(CACHE_DIR))
+            model = AutoModelForSeq2SeqLM.from_pretrained(
+                MODEL_NAME, token=HF_TOKEN, cache_dir=str(CACHE_DIR), torch_dtype=torch.float32
+            ).to('cpu')
+            logger.info('Model loaded on CPU')
 
-    if lang == 'python':
-        user_code = autopep8.fix_code(user_code)
+        if lang == 'python':
+            user_code = autopep8.fix_code(user_code)
 
-    prompt = f"""Optimize this {lang} code:\n\n{user_code}\n\nOptimized version:"""
-    inputs = tokenizer(prompt, return_tensors="pt").to("cpu")
-    outputs = model.generate(**inputs, max_length=1024)
-    optimized = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        logger.info(f'Generating optimized code for language: {lang}')
+        prompt = f"Improve and optimize this {lang} code:\n\n{user_code}\n\nOptimized version:\n"
 
-    # extract optimized block
-    match = re.search(r"(?:Optimized version:\n)(.*)", optimized, re.DOTALL)
-    return match.group(1).strip() if match else optimized
+        inputs = tokenizer(prompt, return_tensors='pt', truncation=True).to('cpu')
+        outputs = model.generate(**inputs, max_length=512, num_beams=3, early_stopping=True)
+        decoded = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+
+        logger.info(f"Decoded Output: {decoded}")
+
+        if 'Optimized version:' in decoded:
+            optimized = decoded.split('Optimized version:', 1)[1].strip()
+        else:
+            optimized = decoded.strip()
+
+        if optimized.strip() in ('...', '', user_code.strip()):
+            raise ValueError("Empty or same code returned")
+
+        return optimized
+
+    except Exception as ex:
+        logger.warning(f"LLM optimization failed: {ex} – Using fallback optimization.")
+        return fallback_optimize_code(user_code, lang)
 
 # Endpoints
-@app.post("/evaluate")
+@app.post('/evaluate')
 async def evaluate_endpoint(req: CodeRequest):
     lang = req.language or detect_language(req.code)
+    logger.info(f'Evaluate request language: {lang}')
     result = evaluate_code(req.code, lang)
-    return {"language": lang, "result": result}
+    return {'language':lang, 'result':result}
 
-@app.post("/optimize")
+@app.post('/optimize')
 async def optimize_endpoint(req: CodeRequest):
     lang = req.language or detect_language(req.code)
-    optimized = optimize_code_ai(req.code, lang)
-    return {"language": lang, "optimized_code": optimized}
+    logger.info(f'Optimize endpoint called; language: {lang}')
+    optimized_code = optimize_code_ai(req.code, lang)
+    return {'language':lang, 'optimized_code':optimized_code}
 
-@app.options("/evaluate")
+@app.options('/evaluate')
 async def options_eval():
-    return Response(status_code=200, headers={"Access-Control-Allow-Origin": "*"})
+    return Response(status_code=200, headers={'Access-Control-Allow-Origin':'*'})
 
-@app.options("/optimize")
+@app.options('/optimize')
 async def options_opt():
-    return Response(status_code=200, headers={"Access-Control-Allow-Origin": "*"})
+    return Response(status_code=200, headers={'Access-Control-Allow-Origin':'*'})
 
-@app.get("/health")
+@app.get('/health')
 async def health():
-    return {"status": "ok" if model is not None else "loading"}
+    return {'status':'ok' if model else 'loading'}
 
-@app.get("/")
+@app.get('/')
 async def root():
-    return {"message": "Auto Language Code API running"}
+    return {'message':'Auto Language Code API running'}
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     import uvicorn
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get('PORT',8080))
     uvicorn.run(
-        "auto_lang_code_api:app",
-        host="0.0.0.0",
-        port=port,
-        workers=1
+        'auto_lang_code_api:app', host='0.0.0.0', port=port, workers=1
     )
