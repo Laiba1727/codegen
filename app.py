@@ -24,15 +24,15 @@ app = FastAPI(
     redoc_url=None
 )
 
-# Create API router with prefix
-router = APIRouter(prefix="/api/v1")
+# Create API router
+api_router = APIRouter()
 
 # Enhanced CORS Configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["*"],  # Changed to allow all methods
     allow_headers=["*"],
     expose_headers=["*"]
 )
@@ -160,7 +160,7 @@ def optimize_code_ai(user_code: str, lang: str) -> str:
         raise HTTPException(status_code=500, detail=f"AI optimization failed: {str(e)}")
 
 # API Endpoints
-@router.post("/evaluate", response_model=dict)
+@api_router.post("/v1/evaluate", response_model=dict)
 async def evaluate_endpoint(request: CodeRequest):
     try:
         result = evaluate_code(request.code, request.language)
@@ -169,7 +169,7 @@ async def evaluate_endpoint(request: CodeRequest):
         logger.error(f"Error in evaluate_endpoint: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.post("/optimize", response_model=dict)
+@api_router.post("/v1/optimize", response_model=dict)
 async def optimize_endpoint(request: CodeRequest):
     try:
         optimized = optimize_code_ai(request.code, request.language)
@@ -193,8 +193,23 @@ async def health_check():
         status_code=200
     )
 
-# Include the router
-app.include_router(router)
+# Include the router with prefix
+app.include_router(api_router, prefix="/api")
+
+# OPTIONS Handler Middleware
+@app.middleware("http")
+async def options_handler(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return Response(
+            content="OK",
+            status_code=200,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+                "Access-Control-Allow-Headers": "*"
+            }
+        )
+    return await call_next(request)
 
 # Middleware to log requests
 @app.middleware("http")
@@ -215,4 +230,3 @@ if __name__ == "__main__":
         timeout_keep_alive=60,
         log_level="info"
     )
-
