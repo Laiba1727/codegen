@@ -12,7 +12,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import logging
 from typing import Optional
 
-# Optional Pygments import for language detection
 try:
     from pygments.lexers import guess_lexer
     from pygments.util import ClassNotFound
@@ -20,11 +19,9 @@ try:
 except ImportError:
     _pygments_available = False
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI
 app = FastAPI(
     title="Auto Language Code Evaluation API",
     docs_url=None,
@@ -32,7 +29,6 @@ app = FastAPI(
     openapi_url=None
 )
 
-# CORS Configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -42,7 +38,6 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
-# Environment Setup
 CACHE_DIR = Path("./.cache/huggingface")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 os.environ["TRANSFORMERS_CACHE"] = str(CACHE_DIR)
@@ -50,12 +45,10 @@ os.environ["HF_HOME"] = str(CACHE_DIR)
 
 HF_TOKEN = os.getenv("HF_API_TOKEN")
 
-# Model Configuration
 MODEL_NAME = "Salesforce/codet5-small"
 tokenizer: Optional[AutoTokenizer] = None
 model: Optional[AutoModelForSeq2SeqLM] = None
 
-# Supported language mapping
 LANG_EXT = {
     'python': 'py',
     'java': 'java',
@@ -63,12 +56,10 @@ LANG_EXT = {
     'javascript': 'js'
 }
 
-# Request Model
 class CodeRequest(BaseModel):
     code: str
-    language: Optional[str] = None  # optional: auto-detect if not given
+    language: Optional[str] = None
 
-# Detect programming language
 def detect_language(code: str) -> str:
     if not _pygments_available:
         logger.warning('Pygments not installed; defaulting to python')
@@ -88,7 +79,6 @@ def detect_language(code: str) -> str:
         logger.warning(f'Language detection failed ({ex}); defaulting to python')
     return 'python'
 
-# Code Evaluation
 def evaluate_code(user_code: str, lang: str) -> dict:
     file_ext = LANG_EXT.get(lang, 'txt')
     filename = f"temp_script.{file_ext}"
@@ -143,7 +133,6 @@ def evaluate_code(user_code: str, lang: str) -> dict:
         logger.error(f"Evaluation error: {ex}")
         return {'status': 'error', 'message': str(ex), 'score': 0}
 
-# Fallback Optimizer
 def fallback_optimize_code(code: str, lang: str) -> str:
     if lang == 'python':
         optimized = autopep8.fix_code(code)
@@ -161,7 +150,6 @@ def fallback_optimize_code(code: str, lang: str) -> str:
         return optimized
     return code + "\n# No optimization available for this language."
 
-# AI Optimizer
 def optimize_code_ai(user_code: str, lang: str) -> str:
     global tokenizer, model
     try:
@@ -191,7 +179,6 @@ def optimize_code_ai(user_code: str, lang: str) -> str:
         logger.warning(f"LLM optimization failed: {ex} – Using fallback optimization.")
         return fallback_optimize_code(user_code, lang)
 
-# API Endpoints
 @app.post('/evaluate')
 async def evaluate_endpoint(req: CodeRequest):
     lang = req.language or detect_language(req.code)
@@ -222,9 +209,7 @@ async def health():
 async def root():
     return {'message': 'Auto Language Code API running'}
 
-# Only run locally with: python filename.py
 if __name__ == '__main__':
     import uvicorn
     port = int(os.environ.get('PORT', 8080))
     uvicorn.run('auto_lang_code_api:app', host='0.0.0.0', port=port, workers=1)
-
