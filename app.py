@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -10,55 +10,43 @@ import os
 from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+from typing import Optional
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Code Evaluation & Optimization API")
+# Initialize FastAPI with explicit settings
+app = FastAPI(
+    title="Code Evaluation & Optimization API",
+    docs_url="/docs",  # Enable Swagger UI
+    openapi_url="/openapi.json",
+    redoc_url=None
+)
 
-# CORS Configuration
+# Create API router with prefix
+router = APIRouter(prefix="/api/v1")
+
+# Enhanced CORS Configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"]
 )
 
-# Environment Setup - Use relative path for cache
+# Environment Setup
 CACHE_DIR = Path("./.cache/huggingface")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 os.environ["TRANSFORMERS_CACHE"] = str(CACHE_DIR)
 os.environ["HF_HOME"] = str(CACHE_DIR)
 
-# Use a smaller model that fits Railway's memory constraints
-MODEL_NAME = "codellama/CodeLlama-1.0-7b-hf"  # Changed from 7b-Instruct
-
-tokenizer = None
-model = None
-
-def load_model():
-    """Load the model with memory optimizations"""
-    global tokenizer, model
-    if tokenizer is None or model is None:
-        logger.info("Loading model...")
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(
-                MODEL_NAME,
-                cache_dir=str(CACHE_DIR))
-            
-            model = AutoModelForCausalLM.from_pretrained(
-                MODEL_NAME,
-                device_map="auto",
-                torch_dtype=torch.float16,
-                low_cpu_mem_usage=True,
-                load_in_8bit=True,  # Enable 8-bit quantization
-                cache_dir=str(CACHE_DIR))
-            logger.info("Model loaded successfully")
-        except Exception as e:
-            logger.error(f"Model loading failed: {str(e)}")
-            raise RuntimeError(f"Failed to load model: {str(e)}")
+# Model Configuration
+MODEL_NAME = "codellama/CodeLlama-1.0-7b-hf"
+tokenizer: Optional[AutoTokenizer] = None
+model: Optional[AutoModelForCausalLM] = None
 
 # Request Model
 class CodeRequest(BaseModel):
@@ -128,7 +116,26 @@ def evaluate_code(user_code: str, lang: str) -> dict:
 
 def optimize_code_ai(user_code: str, lang: str) -> str:
     """Generate optimized code using AI"""
-    load_model()  # Load the model only when optimization is requested
+    global tokenizer, model
+    if tokenizer is None or model is None:
+        logger.info("Loading model...")
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                MODEL_NAME,
+                cache_dir=str(CACHE_DIR))
+            
+            model = AutoModelForCausalLM.from_pretrained(
+                MODEL_NAME,
+                device_map="auto",
+                torch_dtype=torch.float16,
+                low_cpu_mem_usage=True,
+                load_in_8bit=True,
+                cache_dir=str(CACHE_DIR))
+            logger.info("Model loaded successfully")
+        except Exception as e:
+            logger.error(f"Model loading failed: {str(e)}")
+            raise RuntimeError(f"Failed to load model: {str(e)}")
+
     try:
         if lang == "python":
             user_code = autopep8.fix_code(user_code)
@@ -138,7 +145,7 @@ def optimize_code_ai(user_code: str, lang: str) -> str:
         prompt = f"Optimize this {lang} code:\n```{lang}\n{user_code}\n```\nOptimized version:"
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
         
-        with torch.no_grad():  # Avoid unnecessary memory use
+        with torch.no_grad():
             outputs = model.generate(**inputs, max_length=1024)
         
         optimized_code = tokenizer.decode(outputs[0], skip_special_tokens=True)
@@ -153,7 +160,7 @@ def optimize_code_ai(user_code: str, lang: str) -> str:
         raise HTTPException(status_code=500, detail=f"AI optimization failed: {str(e)}")
 
 # API Endpoints
-@app.post("/evaluate")
+@router.post("/evaluate", response_model=dict)
 async def evaluate_endpoint(request: CodeRequest):
     try:
         result = evaluate_code(request.code, request.language)
@@ -162,7 +169,7 @@ async def evaluate_endpoint(request: CodeRequest):
         logger.error(f"Error in evaluate_endpoint: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/optimize")
+@router.post("/optimize", response_model=dict)
 async def optimize_endpoint(request: CodeRequest):
     try:
         optimized = optimize_code_ai(request.code, request.language)
@@ -172,30 +179,40 @@ async def optimize_endpoint(request: CodeRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/")
-def health_check():
-    return {
-        "status": "API is running",
-        "model": MODEL_NAME,
-        "endpoints": {
-            "evaluate": "POST /evaluate",
-            "optimize": "POST /optimize"
-        }
-    }
+async def root():
+    return Response(
+        content="Welcome to Code Evaluation API. Use /docs for Swagger UI.",
+        media_type="text/plain"
+    )
 
 @app.get("/health")
 async def health_check():
-    """Simplified health check for Railway"""
-    return {"status": "healthy"}
+    return Response(
+        content="OK",
+        media_type="text/plain",
+        status_code=200
+    )
+
+# Include the router
+app.include_router(router)
+
+# Middleware to log requests
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    logger.info(f"Incoming request: {request.method} {request.url.path}")
+    response = await call_next(request)
+    logger.info(f"Response status: {response.status_code}")
+    return response
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8080))  # Default to 8080 if $PORT not set
+    port = int(os.environ.get("PORT", 8080))
     uvicorn.run(
         "app:app",
         host="0.0.0.0",
         port=port,
         workers=1,
-        timeout_keep_alive=60
+        timeout_keep_alive=60,
+        log_level="info"
     )
-
 
