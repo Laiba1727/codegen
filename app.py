@@ -12,7 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 import logging
 from typing import Optional
 
-# Import Pygments for language detection\ nfrom pygments.lexers import guess_lexer
+# Import Pygments for language detection
+from pygments.lexers import guess_lexer
 from pygments.util import ClassNotFound
 
 # Configure logging
