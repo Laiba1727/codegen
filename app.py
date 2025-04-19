@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 import autopep8
 import subprocess
 import time
@@ -46,7 +46,7 @@ HF_TOKEN = os.getenv("HF_API_TOKEN")
 # Model Configuration
 MODEL_NAME = "Salesforce/codet5-base"
 tokenizer: Optional[AutoTokenizer] = None
-model: Optional[AutoModelForCausalLM] = None
+model: Optional[AutoModelForSeq2SeqLM] = None
 
 # Request Model
 class CodeRequest(BaseModel):
@@ -123,7 +123,7 @@ def optimize_code_ai(user_code: str, lang: str) -> str:
                 token=HF_TOKEN,
                 cache_dir=str(CACHE_DIR)
             )
-            model = AutoModelForCausalLM.from_pretrained(
+            model = AutoModelForSeq2SeqLM.from_pretrained(
                 MODEL_NAME,
                 token=HF_TOKEN,
                 device_map="auto",
@@ -236,4 +236,3 @@ if __name__ == "__main__":
         workers=1,
         timeout_keep_alive=60
     )
-
