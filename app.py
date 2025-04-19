@@ -16,20 +16,20 @@ from typing import Optional
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI with minimal settings
+# Initialize FastAPI
 app = FastAPI(
     title="Code Evaluation API",
-    docs_url=None,  # Disable docs to simplify
+    docs_url=None,
     redoc_url=None,
     openapi_url=None
 )
 
-# Enhanced CORS Configuration
+# CORS Configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["POST", "OPTIONS", "GET"],  # Explicitly allowed methods
+    allow_methods=["POST", "OPTIONS", "GET"],
     allow_headers=["*"],
     expose_headers=["*"]
 )
@@ -39,6 +39,9 @@ CACHE_DIR = Path("./.cache/huggingface")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 os.environ["TRANSFORMERS_CACHE"] = str(CACHE_DIR)
 os.environ["HF_HOME"] = str(CACHE_DIR)
+
+# Hugging Face Token from Railway
+HF_TOKEN = os.getenv("HF_API_TOKEN")
 
 # Model Configuration
 MODEL_NAME = "Salesforce/codet5-base"
@@ -50,9 +53,8 @@ class CodeRequest(BaseModel):
     code: str
     language: str = "python"
 
-# Helper Functions
+# Evaluate code
 def evaluate_code(user_code: str, lang: str) -> dict:
-    """Evaluate code for correctness, performance, and security"""
     try:
         start_time = time.time()
         file_ext = {"python": "py", "java": "java", "cpp": "cpp", "javascript": "js"}.get(lang, "txt")
@@ -70,17 +72,16 @@ def evaluate_code(user_code: str, lang: str) -> dict:
 
         if lang in commands:
             result = subprocess.run(" ".join(commands[lang]), 
-                                capture_output=True, 
-                                text=True, 
-                                timeout=5, 
-                                shell=True)
+                                    capture_output=True, 
+                                    text=True, 
+                                    timeout=5, 
+                                    shell=True)
             exec_time = time.time() - start_time
             correctness = 1 if result.returncode == 0 else 0
             error_message = None if correctness else result.stderr.strip()
         else:
             return {"status": "error", "message": "Unsupported language", "score": 0}
 
-        # Scoring logic
         readability_score = 20 if len(user_code) < 200 else 10
         efficiency_score = 30 if exec_time < 1 else 10
         security_score = 20 if "eval(" not in user_code and "exec(" not in user_code else 0
@@ -111,23 +112,26 @@ def evaluate_code(user_code: str, lang: str) -> dict:
         logger.error(f"Error in evaluate_code: {str(e)}")
         return {"status": "error", "message": str(e), "score": 0}
 
+# Optimize code using LLM
 def optimize_code_ai(user_code: str, lang: str) -> str:
-    """Generate optimized code using AI"""
     global tokenizer, model
     if tokenizer is None or model is None:
         logger.info("Loading model...")
         try:
             tokenizer = AutoTokenizer.from_pretrained(
                 MODEL_NAME,
-                cache_dir=str(CACHE_DIR))
-            
+                token=HF_TOKEN,
+                cache_dir=str(CACHE_DIR)
+            )
             model = AutoModelForCausalLM.from_pretrained(
                 MODEL_NAME,
+                token=HF_TOKEN,
                 device_map="auto",
                 torch_dtype=torch.float16,
                 low_cpu_mem_usage=True,
                 load_in_8bit=True,
-                cache_dir=str(CACHE_DIR))
+                cache_dir=str(CACHE_DIR)
+            )
             logger.info("Model loaded successfully")
         except Exception as e:
             logger.error(f"Model loading failed: {str(e)}")
@@ -138,25 +142,25 @@ def optimize_code_ai(user_code: str, lang: str) -> str:
             user_code = autopep8.fix_code(user_code)
             user_code = re.sub(r"eval\((.*)\)", r"int(\1)  # Removed eval for security", user_code)
             user_code = re.sub(r"/ 0", "/ 1  # Fixed division by zero", user_code)
-        
+
         prompt = f"Optimize this {lang} code:\n```{lang}\n{user_code}\n```\nOptimized version:"
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-        
+
         with torch.no_grad():
             outputs = model.generate(**inputs, max_length=1024)
-        
+
         optimized_code = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        
+
         code_match = re.search(r'```(?:python)?\n(.*?)\n```', optimized_code, re.DOTALL)
         if code_match:
             optimized_code = code_match.group(1)
-        
+
         return optimized_code if optimized_code else user_code
     except Exception as e:
         logger.error(f"Error in optimize_code_ai: {str(e)}")
         raise HTTPException(status_code=500, detail=f"AI optimization failed: {str(e)}")
 
-# API Endpoints - Direct routes without router
+# Endpoints
 @app.post("/evaluate")
 async def evaluate_endpoint(request: CodeRequest):
     try:
@@ -175,7 +179,6 @@ async def optimize_endpoint(request: CodeRequest):
         logger.error(f"Error in optimize_endpoint: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
 
-# Explicit OPTIONS handlers
 @app.options("/evaluate")
 async def options_evaluate():
     return Response(
@@ -198,7 +201,6 @@ async def options_optimize():
         }
     )
 
-# Health check endpoint
 @app.get("/health")
 async def health_check():
     return Response(
@@ -207,7 +209,6 @@ async def health_check():
         status_code=200
     )
 
-# Root endpoint
 @app.get("/")
 async def root():
     return {
@@ -218,7 +219,6 @@ async def root():
         }
     }
 
-# Request logging middleware
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     logger.info(f"Request: {request.method} {request.url.path}")
