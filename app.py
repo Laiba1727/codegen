@@ -189,14 +189,13 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT", 8080))  # Default to 8080 if $PORT not set
     uvicorn.run(
         "app:app",
         host="0.0.0.0",
         port=port,
-        timeout_keep_alive=60,
-        workers=1,  # Single worker to save memory
-        reload=False  # Disable reload for production
+        workers=1,
+        timeout_keep_alive=60
     )
 
 
