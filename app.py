@@ -13,7 +13,7 @@ import logging
 from typing import Optional
 from fastapi.responses import JSONResponse
 
-# Configure logging
+# Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ app = FastAPI(
     openapi_url=None
 )
 
-# CORS Configuration
+# CORS Setup
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -35,26 +35,25 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
-# Environment Setup
+# Environment Variables and Cache
 CACHE_DIR = Path("./.cache/huggingface")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 os.environ["TRANSFORMERS_CACHE"] = str(CACHE_DIR)
 os.environ["HF_HOME"] = str(CACHE_DIR)
 
-# Hugging Face Token from Railway
 HF_TOKEN = os.getenv("HF_API_TOKEN")
 
-# Model Configuration
+# Model Info
 MODEL_NAME = "Salesforce/codet5-base"
 tokenizer: Optional[AutoTokenizer] = None
 model: Optional[AutoModelForSeq2SeqLM] = None
 
-# Request Model
+# Request Body
 class CodeRequest(BaseModel):
     code: str
     language: str = "python"
 
-# Evaluate code
+# Code Evaluation Logic
 def evaluate_code(user_code: str, lang: str) -> dict:
     try:
         start_time = time.time()
@@ -72,10 +71,10 @@ def evaluate_code(user_code: str, lang: str) -> dict:
         }
 
         if lang in commands:
-            result = subprocess.run(" ".join(commands[lang]), 
-                                    capture_output=True, 
-                                    text=True, 
-                                    timeout=15, 
+            result = subprocess.run(" ".join(commands[lang]),
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=15,
                                     shell=True)
             exec_time = time.time() - start_time
             correctness = 1 if result.returncode == 0 else 0
@@ -109,11 +108,12 @@ def evaluate_code(user_code: str, lang: str) -> dict:
             "feedback": "\n".join(feedback),
             "error_details": error_message if not correctness else None
         }
+
     except Exception as e:
         logger.error(f"Error in evaluate_code: {str(e)}")
         return {"status": "error", "message": str(e), "score": 0}
 
-# Optimize code using LLM
+# Code Optimization Logic
 def optimize_code_ai(user_code: str, lang: str) -> str:
     global tokenizer, model
     if tokenizer is None or model is None:
@@ -127,10 +127,6 @@ def optimize_code_ai(user_code: str, lang: str) -> str:
             model = AutoModelForSeq2SeqLM.from_pretrained(
                 MODEL_NAME,
                 token=HF_TOKEN,
-                device_map="auto",
-                torch_dtype=torch.float16,
-                low_cpu_mem_usage=True,
-                load_in_8bit=True,
                 cache_dir=str(CACHE_DIR)
             )
             logger.info("Model loaded successfully")
@@ -161,7 +157,7 @@ def optimize_code_ai(user_code: str, lang: str) -> str:
         logger.error(f"Error in optimize_code_ai: {str(e)}")
         raise HTTPException(status_code=500, detail=f"AI optimization failed: {str(e)}")
 
-# Endpoints
+# API Endpoints
 @app.post("/evaluate")
 async def evaluate_endpoint(request: CodeRequest):
     try:
@@ -225,6 +221,7 @@ async def log_requests(request: Request, call_next):
     logger.info(f"Response: {response.status_code}")
     return response
 
+# Run the app
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
