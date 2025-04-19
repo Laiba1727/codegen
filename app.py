@@ -12,8 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import logging
 from typing import Optional
 
-# Import Pygments for language detection
-from pygments.lexers import guess_lexer
+# Import Pygments for language detection\ nfrom pygments.lexers import guess_lexer
 from pygments.util import ClassNotFound
 
 # Configure logging
@@ -195,4 +194,9 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
-    uvicorn.run("app:app", host="0.0.0.0", port=port, workers=1)
+    uvicorn.run(
+        "auto_lang_code_api:app",
+        host="0.0.0.0",
+        port=port,
+        workers=1
+    )
