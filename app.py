@@ -41,7 +41,7 @@ os.environ["TRANSFORMERS_CACHE"] = str(CACHE_DIR)
 os.environ["HF_HOME"] = str(CACHE_DIR)
 
 # Model Configuration
-MODEL_NAME = "codellama/CodeLlama-1.0-7b-hf"
+MODEL_NAME = "Salesforce/codet5-base"
 tokenizer: Optional[AutoTokenizer] = None
 model: Optional[AutoModelForCausalLM] = None
 
