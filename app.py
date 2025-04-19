@@ -9,6 +9,11 @@ import re
 import os
 from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Code Evaluation & Optimization API")
 
@@ -21,32 +26,38 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Environment Setup
-CACHE_DIR = Path("/.cache/huggingface")
+# Environment Setup - Use relative path for cache
+CACHE_DIR = Path("./.cache/huggingface")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 os.environ["TRANSFORMERS_CACHE"] = str(CACHE_DIR)
 os.environ["HF_HOME"] = str(CACHE_DIR)
 
-# Lazy model loading with efficient memory management
-MODEL_NAME = "codellama/CodeLlama-7b-Instruct-hf"
+# Use a smaller model that fits Railway's memory constraints
+MODEL_NAME = "codellama/CodeLlama-1.0-7b-hf"  # Changed from 7b-Instruct
 
 tokenizer = None
 model = None
 
 def load_model():
-    """Load the model only when it's needed to save memory."""
+    """Load the model with memory optimizations"""
     global tokenizer, model
     if tokenizer is None or model is None:
+        logger.info("Loading model...")
         try:
             tokenizer = AutoTokenizer.from_pretrained(
                 MODEL_NAME,
                 cache_dir=str(CACHE_DIR))
+            
             model = AutoModelForCausalLM.from_pretrained(
                 MODEL_NAME,
                 device_map="auto",
-                torch_dtype=torch.float16,  # Use float16 for memory optimization
+                torch_dtype=torch.float16,
+                low_cpu_mem_usage=True,
+                load_in_8bit=True,  # Enable 8-bit quantization
                 cache_dir=str(CACHE_DIR))
+            logger.info("Model loaded successfully")
         except Exception as e:
+            logger.error(f"Model loading failed: {str(e)}")
             raise RuntimeError(f"Failed to load model: {str(e)}")
 
 # Request Model
@@ -57,21 +68,21 @@ class CodeRequest(BaseModel):
 # Helper Functions
 def evaluate_code(user_code: str, lang: str) -> dict:
     """Evaluate code for correctness, performance, and security"""
-    start_time = time.time()
-    file_ext = {"python": "py", "java": "java", "cpp": "cpp", "javascript": "js"}.get(lang, "txt")
-    filename = f"temp_script.{file_ext}"
-
-    with open(filename, "w") as f:
-        f.write(user_code)
-
-    commands = {
-        "python": ["python3", filename],
-        "java": ["javac", filename, "&&", "java", filename.replace(".java", "")],
-        "cpp": ["g++", filename, "-o", "temp_script.out", "&&", "./temp_script.out"],
-        "javascript": ["node", filename]
-    }
-
     try:
+        start_time = time.time()
+        file_ext = {"python": "py", "java": "java", "cpp": "cpp", "javascript": "js"}.get(lang, "txt")
+        filename = f"temp_script.{file_ext}"
+
+        with open(filename, "w") as f:
+            f.write(user_code)
+
+        commands = {
+            "python": ["python3", filename],
+            "java": ["javac", filename, "&&", "java", filename.replace(".java", "")],
+            "cpp": ["g++", filename, "-o", "temp_script.out", "&&", "./temp_script.out"],
+            "javascript": ["node", filename]
+        }
+
         if lang in commands:
             result = subprocess.run(" ".join(commands[lang]), 
                                 capture_output=True, 
@@ -83,36 +94,37 @@ def evaluate_code(user_code: str, lang: str) -> dict:
             error_message = None if correctness else result.stderr.strip()
         else:
             return {"status": "error", "message": "Unsupported language", "score": 0}
+
+        # Scoring logic
+        readability_score = 20 if len(user_code) < 200 else 10
+        efficiency_score = 30 if exec_time < 1 else 10
+        security_score = 20 if "eval(" not in user_code and "exec(" not in user_code else 0
+        total_score = (correctness * 50) + readability_score + efficiency_score + security_score
+
+        feedback = []
+        if correctness == 0:
+            feedback.append("❌ Error in Code Execution! Check syntax or logic errors.")
+            feedback.append(f"📌 Error Details: {error_message}")
+        else:
+            feedback.append("✅ Code executed successfully!")
+
+        if efficiency_score < 30:
+            feedback.append("⚡ Performance Issue: Code took longer to execute. Optimize loops or calculations.")
+        if readability_score < 20:
+            feedback.append("📖 Readability Issue: Code is lengthy. Break into smaller functions.")
+        if security_score == 0:
+            feedback.append("🔒 Security Risk: Avoid using eval() or exec().")
+
+        return {
+            "status": "success" if correctness else "error",
+            "execution_time": round(exec_time, 3) if correctness else None,
+            "score": max(0, min(100, total_score)),
+            "feedback": "\n".join(feedback),
+            "error_details": error_message if not correctness else None
+        }
     except Exception as e:
+        logger.error(f"Error in evaluate_code: {str(e)}")
         return {"status": "error", "message": str(e), "score": 0}
-
-    # Scoring logic
-    readability_score = 20 if len(user_code) < 200 else 10
-    efficiency_score = 30 if exec_time < 1 else 10
-    security_score = 20 if "eval(" not in user_code and "exec(" not in user_code else 0
-    total_score = (correctness * 50) + readability_score + efficiency_score + security_score
-
-    feedback = []
-    if correctness == 0:
-        feedback.append("❌ Error in Code Execution! Check syntax or logic errors.")
-        feedback.append(f"📌 Error Details: {error_message}")
-    else:
-        feedback.append("✅ Code executed successfully!")
-
-    if efficiency_score < 30:
-        feedback.append("⚡ Performance Issue: Code took longer to execute. Optimize loops or calculations.")
-    if readability_score < 20:
-        feedback.append("📖 Readability Issue: Code is lengthy. Break into smaller functions.")
-    if security_score == 0:
-        feedback.append("🔒 Security Risk: Avoid using eval() or exec().")
-
-    return {
-        "status": "success" if correctness else "error",
-        "execution_time": round(exec_time, 3) if correctness else None,
-        "score": max(0, min(100, total_score)),
-        "feedback": "\n".join(feedback),
-        "error_details": error_message if not correctness else None
-    }
 
 def optimize_code_ai(user_code: str, lang: str) -> str:
     """Generate optimized code using AI"""
@@ -137,6 +149,7 @@ def optimize_code_ai(user_code: str, lang: str) -> str:
         
         return optimized_code if optimized_code else user_code
     except Exception as e:
+        logger.error(f"Error in optimize_code_ai: {str(e)}")
         raise HTTPException(status_code=500, detail=f"AI optimization failed: {str(e)}")
 
 # API Endpoints
@@ -146,6 +159,7 @@ async def evaluate_endpoint(request: CodeRequest):
         result = evaluate_code(request.code, request.language)
         return {"status": "success", "result": result}
     except Exception as e:
+        logger.error(f"Error in evaluate_endpoint: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/optimize")
@@ -154,6 +168,7 @@ async def optimize_endpoint(request: CodeRequest):
         optimized = optimize_code_ai(request.code, request.language)
         return {"status": "success", "optimized_code": optimized}
     except Exception as e:
+        logger.error(f"Error in optimize_endpoint: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/")
@@ -167,10 +182,21 @@ def health_check():
         }
     }
 
+@app.get("/health")
+async def health_check():
+    """Simplified health check for Railway"""
+    return {"status": "healthy"}
+
 if __name__ == "__main__":
     import uvicorn
-    import os
-    port = int(os.environ.get("PORT", 8000))  # Railway will provide PORT
-    uvicorn.run("app:app", host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(
+        "app:app",
+        host="0.0.0.0",
+        port=port,
+        timeout_keep_alive=60,
+        workers=1,  # Single worker to save memory
+        reload=False  # Disable reload for production
+    )
 
 
