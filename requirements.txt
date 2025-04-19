@@ -4,7 +4,7 @@ transformers>=4.28.0
 torch>=2.0.0
 autopep8>=2.0.0
 accelerate>=0.18.0
-bitsandbytes>=0.39.0
+bitsandbytes-cpu  # <- use this instead of the GPU one
 python-multipart
 protobuf==3.20.3
 python-dotenv
