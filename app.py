@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 from typing import Optional
+from fastapi.responses import JSONResponse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -74,7 +75,7 @@ def evaluate_code(user_code: str, lang: str) -> dict:
             result = subprocess.run(" ".join(commands[lang]), 
                                     capture_output=True, 
                                     text=True, 
-                                    timeout=5, 
+                                    timeout=15, 
                                     shell=True)
             exec_time = time.time() - start_time
             correctness = 1 if result.returncode == 0 else 0
@@ -126,9 +127,10 @@ def optimize_code_ai(user_code: str, lang: str) -> str:
             model = AutoModelForSeq2SeqLM.from_pretrained(
                 MODEL_NAME,
                 token=HF_TOKEN,
-                device_map="cpu",  # Force the model to run on CPU
-                torch_dtype=torch.float32,  # Use float32 for CPU
-                load_in_8bit=False,  # Disable 8-bit quantization
+                device_map="auto",
+                torch_dtype=torch.float16,
+                low_cpu_mem_usage=True,
+                load_in_8bit=True,
                 cache_dir=str(CACHE_DIR)
             )
             logger.info("Model loaded successfully")
@@ -202,11 +204,9 @@ async def options_optimize():
 
 @app.get("/health")
 async def health_check():
-    return Response(
-        content="OK",
-        media_type="text/plain",
-        status_code=200
-    )
+    if model is None:
+        return {"status": "error", "message": "Model not loaded yet"}
+    return {"status": "success", "message": "Model loaded"}
 
 @app.get("/")
 async def root():
@@ -235,3 +235,4 @@ if __name__ == "__main__":
         workers=1,
         timeout_keep_alive=60
     )
+
