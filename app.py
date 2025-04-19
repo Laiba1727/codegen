@@ -45,7 +45,7 @@ os.environ["HF_HOME"] = str(CACHE_DIR)
 HF_TOKEN = os.getenv("HF_API_TOKEN")
 
 # Model Configuration
-MODEL_NAME = "Salesforce/codet5-base"
+MODEL_NAME = "Salesforce/codet5-small"
 tokenizer: Optional[AutoTokenizer] = None
 model: Optional[AutoModelForSeq2SeqLM] = None
 
