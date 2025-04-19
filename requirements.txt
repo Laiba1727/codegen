@@ -6,3 +6,4 @@ autopep8>=2.0.0
 accelerate>=0.18.0
 bitsandbytes>=0.39.0
 python-multipart
+protobuf==3.20.3  # Specific version to avoid conflicts
