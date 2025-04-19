@@ -126,10 +126,9 @@ def optimize_code_ai(user_code: str, lang: str) -> str:
             model = AutoModelForSeq2SeqLM.from_pretrained(
                 MODEL_NAME,
                 token=HF_TOKEN,
-                device_map="auto",
-                torch_dtype=torch.float16,
-                low_cpu_mem_usage=True,
-                load_in_8bit=True,
+                device_map="cpu",  # Force the model to run on CPU
+                torch_dtype=torch.float32,  # Use float32 for CPU
+                load_in_8bit=False,  # Disable 8-bit quantization
                 cache_dir=str(CACHE_DIR)
             )
             logger.info("Model loaded successfully")
