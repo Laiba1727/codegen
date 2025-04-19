@@ -144,9 +144,14 @@ def optimize_code_ai(user_code: str, lang: str) -> str:
             user_code = re.sub(r"eval\((.*)\)", r"int(\1)  # Removed eval for security", user_code)
             user_code = re.sub(r"/ 0", "/ 1  # Fixed division by zero", user_code)
 
-        prompt = f"Optimize this {lang} code:\n
-{lang}\n{user_code}\n
-\nOptimized version:"
+        # Corrected f-string with multiline string
+        prompt = f"""Optimize this {lang} code:
+
+{lang}
+{user_code}
+
+Optimized version:"""
+        
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
         with torch.no_grad():
@@ -154,9 +159,7 @@ def optimize_code_ai(user_code: str, lang: str) -> str:
 
         optimized_code = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-        code_match = re.search(r'
-(?:python)?\n(.*?)\n
-', optimized_code, re.DOTALL)
+        code_match = re.search(r'(?<=\n)(.*?)(?=\n)', optimized_code, re.DOTALL)
         if code_match:
             optimized_code = code_match.group(1)
 
@@ -238,5 +241,4 @@ if __name__ == "__main__":
         port=port,
         workers=1,
         timeout_keep_alive=60
-    ) 
-
+    )
